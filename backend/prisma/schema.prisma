@@ -1,0 +1,156 @@
+// QueueFlow database schema — Supabase PostgreSQL.
+// Kept intentionally simple: roles live directly on User (no separate
+// per-organization membership table). Good enough for a single-tenant demo
+// while still modeling the real domain (orgs, branches, services, counters,
+// queue entries, appointments) with proper relations.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  CUSTOMER
+  STAFF
+  ADMIN
+}
+
+enum QueueEntryStatus {
+  WAITING
+  CALLED
+  IN_SERVICE
+  COMPLETED
+  SKIPPED
+  CANCELLED
+}
+
+enum CounterStatus {
+  AVAILABLE
+  BUSY
+  BREAK
+  OFFLINE
+}
+
+enum Priority {
+  NORMAL
+  HIGH
+  EMERGENCY
+}
+
+enum EntryType {
+  WALK_IN
+  VIRTUAL
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CANCELLED
+  COMPLETED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  fullName     String
+  role         Role     @default(CUSTOMER)
+  createdAt    DateTime @default(now())
+}
+
+model Organization {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+
+  branches Branch[]
+  services Service[]
+}
+
+model Branch {
+  id             String @id @default(uuid())
+  organizationId String
+  name           String
+  address        String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  counters     Counter[]
+  services     Service[]     @relation("BranchServices")
+  queueEntries QueueEntry[]
+  appointments Appointment[]
+}
+
+model Service {
+  id                String  @id @default(uuid())
+  organizationId    String
+  name              String
+  description       String?
+  estimatedDuration Int // minutes
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branches     Branch[]      @relation("BranchServices")
+  queueEntries QueueEntry[]
+  appointments Appointment[]
+}
+
+model Counter {
+  id               String        @id @default(uuid())
+  branchId         String
+  name             String
+  status           CounterStatus @default(OFFLINE)
+  assignedStaffId  String?
+  currentEntryId   String?       @unique
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, name])
+}
+
+model QueueEntry {
+  id           String            @id @default(uuid())
+  branchId     String
+  serviceId    String
+  customerName String
+  token        String
+  type         EntryType         @default(VIRTUAL)
+  status       QueueEntryStatus  @default(WAITING)
+  priority     Priority          @default(NORMAL)
+  counterId    String?
+  createdAt    DateTime          @default(now())
+  calledAt     DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  // Backend-generated tokens are unique per branch+service+day, preventing
+  // duplicates even if two requests land at the same moment.
+  @@unique([branchId, serviceId, token])
+}
+
+model Appointment {
+  id           String            @id @default(uuid())
+  branchId     String
+  serviceId    String
+  customerName String
+  scheduledAt  DateTime
+  status       AppointmentStatus @default(SCHEDULED)
+
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  actor     String
+  action    String
+  entity    String
+  metadata  String?
+  createdAt DateTime @default(now())
+}
